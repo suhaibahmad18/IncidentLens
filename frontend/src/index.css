@@ -1,0 +1,67 @@
+:root {
+  --text: #374151;
+  --text-h: #111827;
+  --bg: #ffffff;
+  --border: #e5e7eb;
+  --ok: #047857;
+  --error: #b91c1c;
+
+  font: 16px/1.5 system-ui, 'Segoe UI', Roboto, sans-serif;
+  color-scheme: light dark;
+  color: var(--text);
+  background: var(--bg);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --text: #d1d5db;
+    --text-h: #f9fafb;
+    --bg: #111827;
+    --border: #374151;
+    --ok: #34d399;
+    --error: #f87171;
+  }
+}
+
+body {
+  margin: 0;
+}
+
+main {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 48px 16px;
+}
+
+h1,
+h2 {
+  color: var(--text-h);
+  margin: 0;
+}
+
+h2 {
+  font-size: 18px;
+  margin-bottom: 8px;
+}
+
+.subtitle {
+  margin: 4px 0 32px;
+}
+
+.card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.status {
+  margin: 0;
+}
+
+.status.ok {
+  color: var(--ok);
+}
+
+.status.error {
+  color: var(--error);
+}
