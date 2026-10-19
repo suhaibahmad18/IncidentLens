@@ -1,0 +1,26 @@
+# Local development database only: PostgreSQL 17 with the pgvector extension.
+# The API and frontend run directly on the host (see backend/ and frontend/).
+name: incidentlens
+
+services:
+  db:
+    image: pgvector/pgvector:0.8.7-pg17-bookworm
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (copy .env.example)}
+      POSTGRES_DB: incidentlens
+    ports:
+      # Bound to localhost only, so the database is not reachable from the network.
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # TCP check (-h) so the container is not reported healthy during first-time init.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d incidentlens"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+volumes:
+  pgdata:
