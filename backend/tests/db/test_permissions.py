@@ -7,7 +7,8 @@ pytestmark = pytest.mark.db
 
 INPUT_TABLES = ["services", "scenarios", "logs", "metrics", "deployments", "doc_chunks"]
 OUTPUT_TABLES = ["runs", "trace_steps", "eval_runs", "eval_results", "llm_cache"]
-ALL_TABLES = INPUT_TABLES + OUTPUT_TABLES + ["schema_migrations"]
+ADMIN_ONLY_TABLES = ["schema_migrations", "scenario_ground_truth"]
+ALL_TABLES = INPUT_TABLES + OUTPUT_TABLES + ADMIN_ONLY_TABLES
 PRIVILEGES = ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"]
 
 # Table-level privileges each role must have; everything else must be absent.
@@ -20,14 +21,8 @@ EXPECTED = {
         "trace_steps": {"SELECT", "INSERT"},
         "llm_cache": {"SELECT", "INSERT", "UPDATE", "DELETE"},
     },
-    "tools_ro": {
-        # scenarios is column-level only (see test_tools_ro_scenario_columns).
-        **{table: {"SELECT"} for table in INPUT_TABLES if table != "scenarios"},
-    },
+    "tools_ro": {table: {"SELECT"} for table in INPUT_TABLES},
 }
-
-TOOLS_RO_SCENARIO_COLUMNS = {"id", "slug", "title", "alert_summary", "incident_start", "created_at"}
-GROUND_TRUTH_COLUMNS = {"expected_root_cause", "root_cause_service_id"}
 
 
 @pytest.mark.parametrize("role", ["incidentlens_app", "tools_ro"])
@@ -47,18 +42,13 @@ def test_privilege_matrix_is_exact(admin_conn, role):
     assert actual == EXPECTED[role]
 
 
-def test_tools_ro_scenario_columns(admin_conn):
-    columns = {
-        row[0]
-        for row in admin_conn.execute(
-            "SELECT attname FROM pg_attribute WHERE attrelid = 'scenarios'::regclass"
-            " AND attnum > 0 AND NOT attisdropped"
-            " AND has_column_privilege('tools_ro', 'scenarios', attname, 'SELECT')"
-        )
-    }
+@pytest.mark.parametrize("role", ["incidentlens_app", "tools_ro"])
+def test_no_column_level_access_to_ground_truth(admin_conn, role):
+    has_any = admin_conn.execute(
+        "SELECT has_any_column_privilege(%s, 'scenario_ground_truth', 'SELECT')", (role,)
+    ).fetchone()[0]
 
-    assert columns == TOOLS_RO_SCENARIO_COLUMNS
-    assert not columns & GROUND_TRUTH_COLUMNS
+    assert has_any is False
 
 
 def test_public_has_no_database_or_schema_rights(admin_conn):
@@ -74,33 +64,29 @@ def test_public_has_no_database_or_schema_rights(admin_conn):
 # --- tools_ro: behaviour under real queries ---
 
 
-@pytest.mark.parametrize("table", [t for t in INPUT_TABLES if t != "scenarios"])
+@pytest.mark.parametrize("table", INPUT_TABLES)
 def test_tools_ro_reads_input_tables(ro_conn, table):
     assert ro_conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0] >= 1
 
 
-def test_tools_ro_reads_allowed_scenario_columns(ro_conn):
-    row = ro_conn.execute("SELECT id, slug, title, alert_summary, incident_start FROM scenarios").fetchone()
+GROUND_TRUTH_QUERIES = [
+    "SELECT * FROM scenario_ground_truth",
+    "SELECT expected_root_cause FROM scenario_ground_truth",
+    "SELECT count(*) FROM scenario_ground_truth",
+    "SELECT 1 FROM scenarios s JOIN scenario_ground_truth g ON g.scenario_id = s.id",
+]
 
-    assert row[1] == "test-pool-exhaustion"
 
+@pytest.mark.parametrize("query", GROUND_TRUTH_QUERIES, ids=["star", "root-cause", "count", "join"])
+@pytest.mark.parametrize("conn_fixture", ["ro_conn", "app_conn"])
+def test_application_roles_cannot_read_ground_truth(request, conn_fixture, query):
+    conn = request.getfixturevalue(conn_fixture)
 
-@pytest.mark.parametrize(
-    "query",
-    [
-        "SELECT expected_root_cause FROM scenarios",
-        "SELECT root_cause_service_id FROM scenarios",
-        "SELECT * FROM scenarios",
-        "SELECT count(*) FROM scenarios WHERE expected_root_cause LIKE '%pool%'",
-    ],
-    ids=["root-cause", "root-cause-service", "star", "filter-on-ground-truth"],
-)
-def test_tools_ro_cannot_read_ground_truth(ro_conn, query):
     with pytest.raises(errors.InsufficientPrivilege):
-        ro_conn.execute(query)
+        conn.execute(query)
 
 
-@pytest.mark.parametrize("table", OUTPUT_TABLES + ["schema_migrations"])
+@pytest.mark.parametrize("table", OUTPUT_TABLES + ADMIN_ONLY_TABLES)
 def test_tools_ro_cannot_read_output_tables(ro_conn, table):
     with pytest.raises(errors.InsufficientPrivilege):
         ro_conn.execute(f"SELECT 1 FROM {table}")
@@ -151,7 +137,7 @@ def test_no_ddl_for_application_roles(request, conn_fixture, statement):
 def test_app_can_record_a_run_and_trace(app_conn):
     run_id = app_conn.execute(
         "INSERT INTO runs (scenario_id, model)"
-        " SELECT id, 'test-model' FROM scenarios WHERE slug = 'test-pool-exhaustion' RETURNING id"
+        " SELECT id, 'test-model' FROM scenarios WHERE slug = 'checkout-db-pool-exhaustion' RETURNING id"
     ).fetchone()[0]
     app_conn.execute(
         "INSERT INTO trace_steps (run_id, step_index, step_type, name) VALUES (%s, 0, 'tool_call', 'search_logs')",

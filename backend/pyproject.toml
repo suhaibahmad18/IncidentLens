@@ -5,6 +5,8 @@ description = "IncidentLens API - AI incident triage copilot backend"
 requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.143.0",
+    "fastembed>=0.9.0",
+    "openai>=3.35.1",
     "psycopg[binary]>=3.3.6",
     "pydantic-settings>=2.16.0",
     "uvicorn[standard]>=0.54.0",
@@ -17,4 +19,7 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-markers = ["db: needs the local PostgreSQL test database (skipped if TEST_DATABASE_NAME is unset)"]
+markers = [
+    "db: needs the local PostgreSQL test database (skipped if TEST_DATABASE_NAME is unset)",
+    "model: loads the real FastEmbed model (skipped if fastembed is not installed)",
+]

@@ -9,6 +9,7 @@ pytestmark = pytest.mark.db
 EXPECTED_TABLES = {
     "services", "scenarios", "logs", "metrics", "deployments", "doc_chunks",
     "runs", "trace_steps", "eval_runs", "eval_results", "llm_cache", "schema_migrations",
+    "scenario_ground_truth",
 }
 
 
@@ -51,7 +52,18 @@ def test_key_column_types(admin_conn, table, column, expected):
 def test_migrations_recorded(admin_conn):
     versions = [row[0] for row in admin_conn.execute("SELECT version FROM schema_migrations ORDER BY 1")]
 
-    assert versions == ["0001_initial_schema", "0002_grants"]
+    assert versions == ["0001_initial_schema", "0002_grants", "0003_ground_truth_and_evidence_refs"]
+
+
+def test_scenarios_table_holds_no_ground_truth(admin_conn):
+    columns = {
+        row[0]
+        for row in admin_conn.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = 'scenarios'"
+        )
+    }
+
+    assert columns == {"id", "slug", "title", "alert_summary", "incident_start", "created_at"}
 
 
 def test_rerunning_migrations_applies_nothing(test_db):

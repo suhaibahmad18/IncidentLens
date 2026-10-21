@@ -8,6 +8,10 @@ from pydantic import SecretStr
 
 from app.db.connection import connect
 from app.db.migrate import run_migrations
+from app.db.seed import seed
+from app.rag.ingest import ingest_runbooks
+from app.tools.context import open_tool_context
+from tests.fakes import FakeEmbedder
 from tests.db_safety import (
     ALLOWED_TEST_DATABASE,
     OWNER_MARKER,
@@ -38,32 +42,6 @@ def _reset_test_database(admin_url: SecretStr) -> None:
         conn.execute(sql.SQL("COMMENT ON DATABASE {} IS {}").format(name, sql.Literal(OWNER_MARKER)))
 
 
-SEED_SQL = """
-INSERT INTO services (name, description) VALUES
-    ('checkout-api', 'Checkout HTTP API'),
-    ('payments-db', 'Payments PostgreSQL');
-
-INSERT INTO scenarios (slug, title, alert_summary, incident_start, expected_root_cause, root_cause_service_id)
-SELECT 'test-pool-exhaustion', 'Checkout errors', 'Checkout 5xx rate above 10%',
-       '2026-01-01T14:00:00Z', 'payments-db connection pool exhausted', id
-FROM services WHERE name = 'payments-db';
-
-INSERT INTO logs (scenario_id, service_id, ts, level, message)
-SELECT sc.id, sv.id, '2026-01-01T14:01:00Z', 'ERROR', 'timeout acquiring connection'
-FROM scenarios sc, services sv WHERE sc.slug = 'test-pool-exhaustion' AND sv.name = 'checkout-api';
-
-INSERT INTO metrics (scenario_id, service_id, name, ts, value, unit)
-SELECT sc.id, sv.id, 'http_error_rate', '2026-01-01T14:01:00Z', 12.5, 'percent'
-FROM scenarios sc, services sv WHERE sc.slug = 'test-pool-exhaustion' AND sv.name = 'checkout-api';
-
-INSERT INTO deployments (scenario_id, service_id, version, deployed_at, status)
-SELECT sc.id, sv.id, 'v1.2.3', '2026-01-01T13:55:00Z', 'succeeded'
-FROM scenarios sc, services sv WHERE sc.slug = 'test-pool-exhaustion' AND sv.name = 'payments-db';
-
-INSERT INTO doc_chunks (source, chunk_index, title, content, embedding)
-VALUES ('runbooks/test.md', 0, 'Pool exhaustion', 'Check active connections.',
-        ('[' || array_to_string(array_fill(0.0::float4, ARRAY[383]) || 1.0::float4, ',') || ']')::vector);
-"""
 
 
 @pytest.fixture(scope="session")
@@ -95,8 +73,8 @@ def test_db() -> dict[str, SecretStr]:
         "tools_ro": _with_dbname(settings.tools_ro_database_url, ALLOWED_TEST_DATABASE),
     }
     run_migrations(urls["admin"])
-    with connect(urls["admin"]) as conn:
-        conn.execute(SEED_SQL)
+    seed(urls["admin"])
+    ingest_runbooks(urls["admin"], FakeEmbedder())
     return urls
 
 
@@ -124,3 +102,9 @@ def app_conn(test_db):
 @pytest.fixture
 def ro_conn(test_db):
     yield from _connection(test_db["tools_ro"])
+
+
+@pytest.fixture
+def tool_ctx(test_db):
+    with open_tool_context(test_db["tools_ro"], "checkout-db-pool-exhaustion", FakeEmbedder()) as ctx:
+        yield ctx
