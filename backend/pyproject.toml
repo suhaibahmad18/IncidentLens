@@ -15,3 +15,6 @@ dev = [
     "httpx>=0.28.1",
     "pytest>=9.1.1",
 ]
+
+[tool.pytest.ini_options]
+markers = ["db: needs the local PostgreSQL test database (skipped if TEST_DATABASE_NAME is unset)"]
