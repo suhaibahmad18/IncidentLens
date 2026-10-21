@@ -176,7 +176,9 @@ def test_app_settings_never_expose_admin_url(clean_env):
     assert "database_admin_url" not in Settings.model_fields
     assert not hasattr(settings, "database_admin_url")
     assert ADMIN_PASSWORD not in settings.model_dump_json()
-    assert set(settings.model_dump()) == {"database_url", "tools_ro_database_url"}
+    assert not any("admin" in key for key in settings.model_dump())
+    secret_fields = {k for k, v in Settings.model_fields.items() if "SecretStr" in str(v.annotation)}
+    assert secret_fields == {"database_url", "tools_ro_database_url", "groq_api_key"}
 
 
 def test_admin_settings_hold_only_admin_url(clean_env):

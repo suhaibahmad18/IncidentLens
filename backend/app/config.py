@@ -2,7 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from psycopg.conninfo import conninfo_to_dict
-from pydantic import SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # backend/app/config.py -> repository root, so loading works from any working directory.
@@ -47,6 +47,22 @@ class Settings(BaseSettings):
     database_url: SecretStr
     tools_ro_database_url: SecretStr
 
+    # LLM (Groq, OpenAI-compatible API). Without a key the API runs but investigations are disabled.
+    groq_api_key: SecretStr | None = None
+    groq_model: str = "openai/gpt-oss-120b"
+    groq_base_url: str = "https://api.groq.com/openai/v1"
+    llm_timeout_seconds: float = Field(30.0, gt=0, le=120)
+    llm_max_retries: int = Field(4, ge=0, le=8)  # SDK retries 429/5xx, honouring retry-after
+    llm_cache_enabled: bool = True
+
+    # Agent budgets: every investigation is bounded by these.
+    agent_max_iterations: int = Field(8, ge=2, le=20)
+    agent_max_tool_calls: int = Field(10, ge=1, le=30)
+    agent_max_tool_result_chars: int = Field(3500, ge=500, le=20000)
+    max_concurrent_runs: int = Field(2, ge=1, le=10)
+    # Public demo protection (no auth in the MVP): cap investigations per rolling hour.
+    max_runs_per_hour: int = Field(20, ge=1, le=1000)
+
     @field_validator("database_url")
     @classmethod
     def _check_app_user(cls, value: SecretStr) -> SecretStr:
@@ -56,6 +72,18 @@ class Settings(BaseSettings):
     @classmethod
     def _check_tools_ro_user(cls, value: SecretStr) -> SecretStr:
         return _require_user(value, TOOLS_RO_ROLE, "TOOLS_RO_DATABASE_URL")
+
+
+class WebSettings(BaseSettings):
+    """HTTP-layer settings with no required values, so the app can be created without a database."""
+
+    model_config = _config()
+
+    # Comma-separated browser origins allowed to call the API. Only needed when the frontend
+    # is served from a different origin; the default deployment serves both from one origin.
+    cors_origins: str = ""
+    # Built React app to serve at "/" (frontend/dist by default) when it exists.
+    frontend_dist: Path = Path(__file__).resolve().parents[2] / "frontend" / "dist"
 
 
 class AdminSettings(BaseSettings):
