@@ -24,6 +24,7 @@ def report_citing_seen(messages, **overrides):
     ids = seen_ids(messages)
     return final({
         "status": "conclusive",
+        "facts": [{"statement": "payments-api logged pool timeouts after its deployment", "evidence_ids": ids[:2]}],
         "root_cause": "payments-api v2.14.0 leaks database connections, exhausting the pool",
         "affected_service": "payments-api",
         "confidence": 0.8,

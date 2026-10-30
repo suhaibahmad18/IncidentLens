@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react'
 
 import { api } from '../api.js'
-import { confidenceLabel, isTerminal, percent, runHeadline } from '../format.js'
-import EvidenceList from './EvidenceList.jsx'
+import { isReportOutdated, isTerminal, pluralize, runHeadline } from '../format.js'
+import Report from './Report.jsx'
 import TraceTimeline from './TraceTimeline.jsx'
 
 const POLL_MS = 1500
 
-export default function Investigation({ slug, config, onRunFinished }) {
+export default function Investigation({ slug, config, onRunFinished, blockedReason = null,
+  evidenceUpdatedAt = null, flagOutdated = false }) {
   const [runId, setRunId] = useState(null)
   const [run, setRun] = useState(null)
   const [trace, setTrace] = useState([])
@@ -80,12 +81,21 @@ export default function Investigation({ slug, config, onRunFinished }) {
 
   const busy = starting || (run && !isTerminal(run.status))
   const report = run?.report
+  const outdated = flagOutdated && isTerminal(run?.status) && isReportOutdated(run, evidenceUpdatedAt)
+  const pillClass = !run ? '' : run.status === 'failed' ? 'pill-error'
+    : !isTerminal(run.status) ? 'pill-live' : report?.status === 'inconclusive' ? 'pill-warn' : 'pill-ok'
 
   return (
     <section className="card investigation">
       <div className="card-header">
-        <h3>Investigation</h3>
-        <button type="button" className="primary" onClick={start} disabled={busy || !config?.investigations_enabled}>
+        <div>
+          <p className="eyebrow">AI investigation · read-only</p>
+          <h3>Investigation</h3>
+        </div>
+        <button type="button" className="primary" onClick={start}
+          disabled={busy || !config?.investigations_enabled || Boolean(blockedReason)}
+          aria-describedby={blockedReason ? `blocked-${slug}` : undefined}>
+          {busy && <span className="spinner" aria-hidden="true" />}
           {busy ? 'Investigating…' : run ? 'Investigate again' : 'Start investigation'}
         </button>
       </div>
@@ -93,65 +103,43 @@ export default function Investigation({ slug, config, onRunFinished }) {
       {config && !config.investigations_enabled && (
         <p className="notice">Investigations are disabled: the server has no LLM API key configured.</p>
       )}
-      {error && <p className="error" role="alert">{error}</p>}
-      {!run && !error && <p className="muted">No investigation yet. Start one to let the agent gather evidence.</p>}
+      {blockedReason && <p id={`blocked-${slug}`} className="notice">{blockedReason}</p>}
+      {error && <p className="error-box" role="alert">{error}</p>}
+      {!run && !error && !blockedReason && (
+        <p className="empty">No investigation yet. Start one to let the agent gather evidence with read-only tools.</p>
+      )}
 
       {run && (
         <div aria-live="polite">
-          <h4 className={`headline ${run.status} ${report?.status ?? ''}`}>{runHeadline(run)}</h4>
+          <div className="run-headline">
+            <span className={`pill ${pillClass}`}>{run.status}</span>
+            <h4 className={`headline ${run.status} ${report?.status ?? ''}`}>{runHeadline(run)}</h4>
+          </div>
 
-          {!isTerminal(run.status) && (
-            <p className="muted">
-              The agent is querying logs, metrics, deployments and runbooks ({trace.length} steps so far).
+          {outdated && (
+            <p className="notice" role="status">
+              New evidence was added after this investigation started, so this report does not reflect it.
+              Run <strong>Investigate again</strong> to include it.
             </p>
           )}
 
-          {run.status === 'failed' && <p className="error">{run.error ?? 'The investigation failed.'}</p>}
-
-          {report && (
-            <div className="report">
-              <p className="root-cause">{report.root_cause}</p>
-              <dl className="facts">
-                <div><dt>Affected service</dt><dd>{report.affected_service ?? 'undetermined'}</dd></div>
-                <div>
-                  <dt>Confidence</dt>
-                  <dd>
-                    <span className={`confidence ${confidenceLabel(report.confidence)}`}>
-                      {confidenceLabel(report.confidence)} ({percent(report.confidence)})
-                    </span>
-                  </dd>
-                </div>
-                <div><dt>Model</dt><dd>{run.model}</dd></div>
-              </dl>
-
-              <h4>Explanation</h4>
-              <p>{report.explanation}</p>
-
-              <h4>Evidence ({report.evidence.length})</h4>
-              <EvidenceList citations={report.evidence} records={evidence} error={evidenceError} />
-
-              {report.remediation?.length > 0 && (
-                <>
-                  <h4>Suggested remediation <span className="badge advisory">advisory: requires human approval</span></h4>
-                  <ul>{report.remediation.map((step) => <li key={step}>{step}</li>)}</ul>
-                </>
-              )}
-
-              {report.missing_information?.length > 0 && (
-                <>
-                  <h4>What is still unknown</h4>
-                  <ul>{report.missing_information.map((item) => <li key={item}>{item}</li>)}</ul>
-                </>
-              )}
-
-              {report.validation_notes?.length > 0 && (
-                <p className="notice small">{report.validation_notes.join(' ')}</p>
-              )}
-            </div>
+          {!isTerminal(run.status) && (
+            <p className="muted">
+              The agent is querying logs, metrics, deployments and runbooks ({pluralize(trace.length, 'step')} so far).
+            </p>
           )}
 
-          <h4>Agent trace</h4>
-          <TraceTimeline steps={trace} />
+          {run.status === 'failed' && <p className="error-box">{run.error ?? 'The investigation failed.'}</p>}
+
+          {report && <Report report={report} model={run.model} records={evidence} evidenceError={evidenceError} />}
+
+          <details className="trace" open={!isTerminal(run.status)}>
+            <summary>
+              <span className="eyebrow">Agent trace</span>
+              <span className="muted small">{pluralize(trace.length, 'step')} · every model and tool call, as recorded</span>
+            </summary>
+            <TraceTimeline steps={trace} />
+          </details>
         </div>
       )}
     </section>

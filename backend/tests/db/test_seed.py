@@ -1,6 +1,7 @@
 import pytest
 
 from app.db.seed import build_all, seed
+from app.seed_data.builder import SERVICES
 from app.seed_data.ground_truth import GROUND_TRUTH
 
 pytestmark = pytest.mark.db
@@ -31,8 +32,11 @@ def test_reseeding_is_idempotent_and_refs_are_stable(test_db, admin_conn):
     after = admin_conn.execute(COUNT_SQL).fetchall()
 
     assert after == before
-    services = admin_conn.execute("SELECT count(*), count(DISTINCT name) FROM services").fetchone()
-    assert services[0] == services[1] == 7
+    # Reseeding never duplicates services (user incidents may have added their own services).
+    total, distinct = admin_conn.execute("SELECT count(*), count(DISTINCT name) FROM services").fetchone()
+    assert total == distinct
+    names = {name for (name,) in admin_conn.execute("SELECT name FROM services")}
+    assert set(SERVICES) <= names
 
 
 def test_key_evidence_exists_in_seeded_data(admin_conn):

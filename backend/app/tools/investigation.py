@@ -21,6 +21,21 @@ MAX_MESSAGE_CHARS = 300
 MAX_RUNBOOK_CHARS = 1200
 MAX_SERIES_POINTS = 16
 
+# The furthest the tools can look around the incident start. Evidence outside these windows
+# is invisible to the agent (used to decide whether an incident has usable evidence).
+MAX_MINUTES_BEFORE = 180
+MAX_MINUTES_AFTER = 60
+MAX_DEPLOYMENT_HOURS_BEFORE = 48
+
+# Metric points older than this (before the incident start) form the "normal" baseline.
+BASELINE_LEAD_MINUTES = 30
+NO_BASELINE_NOTE = (
+    f"No baseline: this window has no data from more than {BASELINE_LEAD_MINUTES} minutes before the "
+    "incident start, so normal behaviour and any deviation cannot be established from it. Retry with a "
+    f"larger minutes_before (up to {MAX_MINUTES_BEFORE}); if that still shows no baseline, earlier data "
+    "for this metric was not provided."
+)
+
 Level = Literal["DEBUG", "INFO", "WARN", "ERROR", "FATAL"]
 
 
@@ -36,22 +51,22 @@ class QueryLogsArgs(StrictArgs):
     service: str | None = None
     min_level: Level = "WARN"
     contains: str | None = Field(None, min_length=2, max_length=100)
-    minutes_before: int = Field(60, ge=0, le=180)
-    minutes_after: int = Field(30, ge=0, le=60)
+    minutes_before: int = Field(60, ge=0, le=MAX_MINUTES_BEFORE)
+    minutes_after: int = Field(30, ge=0, le=MAX_MINUTES_AFTER)
     limit: int = Field(20, ge=1, le=50)
 
 
 class GetMetricsArgs(StrictArgs):
     service: str
     metric: str | None = Field(None, pattern=r"^[a-z0-9_]{1,64}$")
-    minutes_before: int = Field(120, ge=0, le=180)
-    minutes_after: int = Field(30, ge=0, le=60)
+    minutes_before: int = Field(120, ge=0, le=MAX_MINUTES_BEFORE)
+    minutes_after: int = Field(30, ge=0, le=MAX_MINUTES_AFTER)
 
 
 class GetDeploymentsArgs(StrictArgs):
     service: str | None = None
-    hours_before: int = Field(6, ge=1, le=48)
-    minutes_after: int = Field(30, ge=0, le=60)
+    hours_before: int = Field(6, ge=1, le=MAX_DEPLOYMENT_HOURS_BEFORE)
+    minutes_after: int = Field(30, ge=0, le=MAX_MINUTES_AFTER)
     limit: int = Field(10, ge=1, le=20)
 
 
@@ -186,16 +201,20 @@ def get_metrics(ctx: ToolContext, args: GetMetricsArgs) -> ToolResult:
 
 def _summarize_series(ctx: ToolContext, service: str, name: str, unit: str, points: list) -> dict:
     values = [value for _, value in points]
-    baseline_cutoff = ctx.incident_start - timedelta(minutes=30)
-    baseline_values = [value for ts, value in points if ts < baseline_cutoff] or values[:1]
-    baseline = statistics.fmean(baseline_values)
+    baseline_cutoff = ctx.incident_start - timedelta(minutes=BASELINE_LEAD_MINUTES)
+    # Only points well before the incident describe "normal". Never fall back to an in-window
+    # point: it may already be the anomaly, which would hide the deviation.
+    baseline_values = [value for ts, value in points if ts < baseline_cutoff]
 
+    baseline = None
     first_deviation = None
-    threshold = max(abs(baseline) * 0.3, 1e-9)
-    for ts, value in points:
-        if ts >= baseline_cutoff and abs(value - baseline) > threshold:
-            first_deviation = _minutes(ctx, ts)
-            break
+    if baseline_values:
+        baseline = statistics.fmean(baseline_values)
+        threshold = max(abs(baseline) * 0.3, 1e-9)
+        for ts, value in points:
+            if ts >= baseline_cutoff and abs(value - baseline) > threshold:
+                first_deviation = _minutes(ctx, ts)
+                break
 
     stride = max(1, len(points) // MAX_SERIES_POINTS)
     sampled = points[::stride][:MAX_SERIES_POINTS]
@@ -205,7 +224,9 @@ def _summarize_series(ctx: ToolContext, service: str, name: str, unit: str, poin
         "evidence_id": metric_evidence_id(service, name),
         "metric": name,
         "unit": unit,
-        "baseline_avg": round(baseline, 3),
+        "baseline_avg": round(baseline, 3) if baseline is not None else None,
+        "baseline_available": baseline is not None,
+        "baseline_note": None if baseline is not None else NO_BASELINE_NOTE,
         "min": min(values),
         "max": max(values),
         "latest": values[-1],
@@ -273,7 +294,10 @@ class ToolSpec:
 
 
 def _service_param(ctx: ToolContext, description: str) -> dict:
-    return {"type": "string", "enum": list(ctx.services), "description": description}
+    param = {"type": "string", "description": description}
+    if ctx.services:  # an empty enum is invalid JSON Schema
+        param["enum"] = list(ctx.services)
+    return param
 
 
 TOOLS: dict[str, ToolSpec] = {
@@ -292,8 +316,8 @@ TOOLS: dict[str, ToolSpec] = {
                     "min_level": {"type": "string", "enum": list(LEVELS), "default": "WARN"},
                     "contains": {"type": "string", "minLength": 2, "maxLength": 100,
                                  "description": "Case-insensitive substring to match in the message."},
-                    "minutes_before": {"type": "integer", "minimum": 0, "maximum": 180, "default": 60},
-                    "minutes_after": {"type": "integer", "minimum": 0, "maximum": 60, "default": 30},
+                    "minutes_before": {"type": "integer", "minimum": 0, "maximum": MAX_MINUTES_BEFORE, "default": 60},
+                    "minutes_after": {"type": "integer", "minimum": 0, "maximum": MAX_MINUTES_AFTER, "default": 30},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
                 },
                 "additionalProperties": False,
@@ -311,8 +335,8 @@ TOOLS: dict[str, ToolSpec] = {
                     "service": _service_param(ctx, "Service whose metrics to read."),
                     "metric": {"type": "string", "pattern": "^[a-z0-9_]{1,64}$",
                                "description": "One metric name (omit for all of the service's metrics)."},
-                    "minutes_before": {"type": "integer", "minimum": 0, "maximum": 180, "default": 120},
-                    "minutes_after": {"type": "integer", "minimum": 0, "maximum": 60, "default": 30},
+                    "minutes_before": {"type": "integer", "minimum": 0, "maximum": MAX_MINUTES_BEFORE, "default": 120},
+                    "minutes_after": {"type": "integer", "minimum": 0, "maximum": MAX_MINUTES_AFTER, "default": 30},
                 },
                 "required": ["service"],
                 "additionalProperties": False,
@@ -327,8 +351,8 @@ TOOLS: dict[str, ToolSpec] = {
                 "type": "object",
                 "properties": {
                     "service": _service_param(ctx, "Only this service (omit for all)."),
-                    "hours_before": {"type": "integer", "minimum": 1, "maximum": 48, "default": 6},
-                    "minutes_after": {"type": "integer", "minimum": 0, "maximum": 60, "default": 30},
+                    "hours_before": {"type": "integer", "minimum": 1, "maximum": MAX_DEPLOYMENT_HOURS_BEFORE, "default": 6},
+                    "minutes_after": {"type": "integer", "minimum": 0, "maximum": MAX_MINUTES_AFTER, "default": 30},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 20, "default": 10},
                 },
                 "additionalProperties": False,

@@ -215,37 +215,78 @@ def _longest_list(node: Any) -> list | None:
 
 
 def finalize_report(report: Report, evidence_seen: set[str], services: tuple[str, ...]) -> dict:
-    """Keep only citations the tools actually returned; downgrade unsupported conclusions."""
+    """Validate the model's answer against what the tools actually returned.
+
+    - Citations and fact references must be evidence IDs a tool returned in THIS run.
+    - A "fact" with no valid reference is not a fact: it moves to unsupported_statements.
+    - A conclusive report needs supported facts, valid citations and a known service.
+    - Claims that IncidentLens performed an action are removed (it cannot act).
+    """
     notes: list[str] = []
+    dropped: list[str] = []
+
     citations = [c for c in report.evidence if c.evidence_id in evidence_seen]
-    dropped = [c.evidence_id for c in report.evidence if c.evidence_id not in evidence_seen]
+    dropped += [c.evidence_id for c in report.evidence if c.evidence_id not in evidence_seen]
+
+    facts: list[dict] = []
+    unsupported: list[str] = []
+    for fact in report.facts:
+        valid = list(dict.fromkeys(i for i in fact.evidence_ids if i in evidence_seen))
+        dropped += [i for i in fact.evidence_ids if i not in evidence_seen]
+        if valid:
+            facts.append({"statement": fact.statement, "evidence_ids": valid})
+        else:
+            unsupported.append(fact.statement)
+    dropped = list(dict.fromkeys(dropped))
     if dropped:
-        notes.append("Removed citations that no tool returned in this investigation.")
+        notes.append("Removed evidence references that no tool returned in this investigation.")
+    if unsupported:
+        notes.append("Moved statements without valid evidence out of the observed facts.")
+
+    remediation = [step for step in report.remediation if not ACTION_CLAIM.search(step)]
+    if len(remediation) < len(report.remediation):
+        notes.append("Removed recommendations that claimed an action was performed; IncidentLens cannot act.")
+    if ACTION_CLAIM.search(report.explanation) or ACTION_CLAIM.search(report.root_cause):
+        notes.append("The explanation claimed an action was performed; IncidentLens performs no actions.")
 
     affected = report.affected_service if report.affected_service in services else None
     if report.affected_service and affected is None:
         notes.append("Removed an affected service that is not a known service.")
 
     status, confidence = report.status, report.confidence
-    if status == "conclusive" and (not citations or affected is None):
+    if status == "conclusive" and (not citations or not facts or affected is None):
         status = "inconclusive"
-        notes.append("Downgraded to inconclusive: the conclusion lacked valid evidence or a known service.")
+        notes.append("Downgraded to inconclusive: the hypothesis lacked supported facts, valid evidence "
+                     "or a known service.")
     if status == "inconclusive":
         confidence = min(confidence, INCONCLUSIVE_CONFIDENCE_CAP)
 
     return {
         "status": status,
+        "facts": facts,
         "root_cause": report.root_cause,
         "affected_service": affected,
         "confidence": round(confidence, 2),
         "explanation": report.explanation,
+        "alternative_explanations": report.alternative_explanations,
         "evidence": [c.model_dump() for c in citations],
-        "remediation": report.remediation,
+        "remediation": remediation,
         "missing_information": report.missing_information,
+        "unsupported_statements": unsupported,
         "advisory_only": True,
         "dropped_citations": dropped,
         "validation_notes": notes,
     }
+
+
+# First-person claims that an action was carried out ("I restarted", "we have rolled back",
+# "IncidentLens deployed"). Passive phrasing is not matched on purpose: "confirm the deployment
+# has been rolled back" is a legitimate recommendation.
+ACTION_CLAIM = re.compile(
+    r"(?i)\b(?:i|we|incidentlens|the agent)\s+(?:have\s+|has\s+|already\s+|just\s+)*"
+    r"(?:restarted|rolled\s+back|reverted|redeployed|deployed|executed|applied|deleted|scaled|"
+    r"killed|fixed|disabled|enabled|rotated|patched|changed|modified)\b"
+)
 
 
 def _ms(started: float) -> int:

@@ -7,21 +7,33 @@ pytestmark = pytest.mark.db
 
 INPUT_TABLES = ["services", "scenarios", "logs", "metrics", "deployments", "doc_chunks"]
 OUTPUT_TABLES = ["runs", "trace_steps", "eval_runs", "eval_results", "llm_cache"]
+ACCOUNT_TABLES = ["users", "sessions"]
 ADMIN_ONLY_TABLES = ["schema_migrations", "scenario_ground_truth"]
-ALL_TABLES = INPUT_TABLES + OUTPUT_TABLES + ADMIN_ONLY_TABLES
+ALL_TABLES = INPUT_TABLES + OUTPUT_TABLES + ACCOUNT_TABLES + ADMIN_ONLY_TABLES
 PRIVILEGES = ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"]
 
 # Table-level privileges each role must have; everything else must be absent.
 EXPECTED = {
     "incidentlens_app": {
         **{table: {"SELECT"} for table in INPUT_TABLES},
-        "runs": {"SELECT", "INSERT", "UPDATE"},
+        # User incidents: evidence may be inserted (never updated or deleted); demos are
+        # protected by a trigger. scenarios/services INSERT is column-level (see below).
+        # Owners may delete their incidents and runs (the API checks ownership; triggers
+        # protect demos); evidence and trace steps go with them through FK cascades.
+        "scenarios": {"SELECT", "DELETE"},
+        "logs": {"SELECT", "INSERT"},
+        "metrics": {"SELECT", "INSERT"},
+        "deployments": {"SELECT", "INSERT"},
+        "runs": {"SELECT", "INSERT", "UPDATE", "DELETE"},
         "eval_runs": {"SELECT", "INSERT", "UPDATE"},
         "eval_results": {"SELECT", "INSERT", "UPDATE"},
         "trace_steps": {"SELECT", "INSERT"},
         "llm_cache": {"SELECT", "INSERT", "UPDATE", "DELETE"},
+        # Accounts are never updated or deleted by the API; sessions are deleted on logout/expiry.
+        "users": {"SELECT", "INSERT"},
+        "sessions": {"SELECT", "INSERT", "DELETE"},
     },
-    "tools_ro": {table: {"SELECT"} for table in INPUT_TABLES},
+    "tools_ro": {table: {"SELECT"} for table in INPUT_TABLES},  # nothing on accounts or sessions
 }
 
 
@@ -40,6 +52,30 @@ def test_privilege_matrix_is_exact(admin_conn, role):
             actual[table] = granted
 
     assert actual == EXPECTED[role]
+
+
+COLUMN_INSERTS = {
+    "incidentlens_app": {
+        "scenarios": {"slug", "title", "alert_summary", "incident_start", "owner_id"},  # never 'kind'
+        "services": {"name"},
+    },
+    "tools_ro": {},
+}
+
+
+@pytest.mark.parametrize("role", ["incidentlens_app", "tools_ro"])
+@pytest.mark.parametrize("table", ["scenarios", "services"])
+def test_column_level_insert_is_exact(admin_conn, role, table):
+    columns = {
+        name
+        for (name,) in admin_conn.execute(
+            "SELECT attname FROM pg_attribute WHERE attrelid = %s::regclass AND attnum > 0"
+            " AND NOT attisdropped AND has_column_privilege(%s, %s, attname, 'INSERT')",
+            (table, role, table),
+        )
+    }
+
+    assert columns == COLUMN_INSERTS[role].get(table, set())
 
 
 @pytest.mark.parametrize("role", ["incidentlens_app", "tools_ro"])
@@ -86,7 +122,7 @@ def test_application_roles_cannot_read_ground_truth(request, conn_fixture, query
         conn.execute(query)
 
 
-@pytest.mark.parametrize("table", OUTPUT_TABLES + ADMIN_ONLY_TABLES)
+@pytest.mark.parametrize("table", OUTPUT_TABLES + ACCOUNT_TABLES + ADMIN_ONLY_TABLES)
 def test_tools_ro_cannot_read_output_tables(ro_conn, table):
     with pytest.raises(errors.InsufficientPrivilege):
         ro_conn.execute(f"SELECT 1 FROM {table}")
@@ -159,20 +195,101 @@ def test_app_can_use_llm_cache(app_conn):
 @pytest.mark.parametrize(
     "statement",
     [
-        "INSERT INTO logs DEFAULT VALUES",
+        "INSERT INTO scenarios (slug, title, alert_summary, incident_start, kind)"
+        " VALUES ('u-forged', 't', 'a', now(), 'demo')",
+        "INSERT INTO services (name, description) VALUES ('forged', 'x')",
         "UPDATE services SET description = 'x'",
-        "DELETE FROM scenarios",
+        "UPDATE scenarios SET title = 'tampered'",
+        "UPDATE scenarios SET owner_id = NULL",
+        "UPDATE logs SET message = 'tampered'",
+        "DELETE FROM logs",
+        "DELETE FROM metrics",
+        "TRUNCATE deployments",
         "UPDATE trace_steps SET name = 'tampered'",
         "DELETE FROM trace_steps",
-        "DELETE FROM runs",
+        "TRUNCATE runs",
+        "TRUNCATE scenarios",
         "TRUNCATE llm_cache",
         "SELECT 1 FROM schema_migrations",
+        "UPDATE users SET password_hash = '$argon2id$forged'",
+        "DELETE FROM users",
+        "TRUNCATE sessions",
+        "UPDATE sessions SET expires_at = now() + interval '10 years'",
     ],
     ids=[
-        "insert-logs", "update-services", "delete-scenarios", "update-trace",
-        "delete-trace", "delete-runs", "truncate-cache", "read-migrations",
+        "forge-demo-kind", "service-description", "update-services", "update-scenarios",
+        "reassign-owner", "update-logs", "delete-logs", "delete-metrics", "truncate-deployments",
+        "update-trace", "delete-trace", "truncate-runs", "truncate-scenarios", "truncate-cache",
+        "read-migrations", "update-users", "delete-users", "truncate-sessions", "extend-sessions",
     ],
 )
 def test_app_denied_outside_its_grants(app_conn, statement):
     with pytest.raises(errors.InsufficientPrivilege):
         app_conn.execute(statement)
+
+
+DEMO = "(SELECT id FROM scenarios WHERE slug = 'checkout-db-pool-exhaustion')"
+CHECKOUT_API = "(SELECT id FROM services WHERE name = 'checkout-api')"
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        f"INSERT INTO logs (scenario_id, service_id, ref, ts, level, message)"
+        f" VALUES ({DEMO}, {CHECKOUT_API}, 'log:9999', now(), 'ERROR', 'planted')",
+        f"INSERT INTO metrics (scenario_id, service_id, name, ts, value) VALUES ({DEMO}, {CHECKOUT_API}, 'x', now(), 1)",
+        f"INSERT INTO deployments (scenario_id, service_id, ref, version, deployed_at, status)"
+        f" VALUES ({DEMO}, {CHECKOUT_API}, 'deploy:99', 'v9', now(), 'succeeded')",
+    ],
+    ids=["logs", "metrics", "deployments"],
+)
+def test_app_cannot_write_into_demo_incidents(app_conn, statement):
+    with pytest.raises(errors.InsufficientPrivilege, match="demo incidents are read-only"):
+        app_conn.execute(statement)
+
+
+def test_owner_can_still_reseed_demos(admin_conn):
+    admin_conn.execute(
+        f"INSERT INTO logs (scenario_id, service_id, ref, ts, level, message)"
+        f" VALUES ({DEMO}, {CHECKOUT_API}, 'log:9999', now(), 'INFO', 'owner write')"
+    )  # rolled back by the fixture
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [f"DELETE FROM scenarios WHERE id = {DEMO}", f"DELETE FROM runs WHERE scenario_id = {DEMO}"],
+    ids=["demo-incident", "demo-runs"],
+)
+def test_app_cannot_delete_demo_data(app_conn, admin_conn, statement):
+    admin_conn.execute(f"INSERT INTO runs (scenario_id, model) VALUES ({DEMO}, 'm')")
+    admin_conn.commit()
+    try:
+        with pytest.raises(errors.InsufficientPrivilege, match="demo incidents are read-only"):
+            app_conn.execute(statement)
+    finally:
+        admin_conn.execute(f"DELETE FROM runs WHERE scenario_id = {DEMO} AND model = 'm'")
+        admin_conn.commit()
+
+
+def test_app_can_delete_a_user_incident_with_everything_in_it(app_conn):
+    owner = app_conn.execute(
+        "INSERT INTO users (email, password_hash) VALUES ('perm-delete@example.com', '$argon2id$x') RETURNING id"
+    ).fetchone()[0]
+    scenario_id = app_conn.execute(
+        "INSERT INTO scenarios (slug, title, alert_summary, incident_start, owner_id)"
+        " VALUES ('u-perm-delete', 't', 'a', now(), %s) RETURNING id", (owner,)
+    ).fetchone()[0]
+    app_conn.execute(
+        f"INSERT INTO logs (scenario_id, service_id, ref, ts, level, message)"
+        f" VALUES (%s, {CHECKOUT_API}, 'log:0001', now(), 'ERROR', 'x')", (scenario_id,)
+    )
+    run_id = app_conn.execute("INSERT INTO runs (scenario_id, model) VALUES (%s, 'm') RETURNING id",
+                              (scenario_id,)).fetchone()[0]
+    app_conn.execute("INSERT INTO trace_steps (run_id, step_index, step_type, name) VALUES (%s, 0, 'llm_call', 'x')",
+                     (run_id,))
+
+    app_conn.execute("DELETE FROM runs WHERE scenario_id = %s", (scenario_id,))
+    app_conn.execute("DELETE FROM scenarios WHERE id = %s", (scenario_id,))
+
+    assert app_conn.execute("SELECT count(*) FROM logs WHERE scenario_id = %s", (scenario_id,)).fetchone()[0] == 0
+    assert app_conn.execute("SELECT count(*) FROM trace_steps WHERE run_id = %s", (run_id,)).fetchone()[0] == 0

@@ -89,8 +89,8 @@ def test_wrong_embedding_dimension_is_rejected(admin_conn):
 def test_deleting_scenario_cascades_to_telemetry_and_ground_truth(admin_conn):
     # A throwaway scenario: seeded ones may have committed runs, which (correctly) block deletion.
     scenario_id = admin_conn.execute(
-        "INSERT INTO scenarios (slug, title, alert_summary, incident_start)"
-        " VALUES ('cascade-probe', 't', 'a', now()) RETURNING id"
+        "INSERT INTO scenarios (slug, title, alert_summary, incident_start, kind)"
+        " VALUES ('cascade-probe', 't', 'a', now(), 'demo') RETURNING id"
     ).fetchone()[0]
     for statement in (
         f"INSERT INTO logs (scenario_id, service_id, ref, ts, level, message) VALUES (%s, {SERVICE}, 'log:0001', now(), 'INFO', 'x')",
@@ -114,3 +114,66 @@ def test_deleting_scenario_with_runs_is_blocked(admin_conn):
 
     with pytest.raises(errors.ForeignKeyViolation):
         admin_conn.execute(f"DELETE FROM scenarios WHERE id = {SCENARIO}")
+
+
+def _user(admin_conn, email: str) -> int:
+    return admin_conn.execute(
+        "INSERT INTO users (email, password_hash) VALUES (%s, '$argon2id$v=19$m=19456,t=2,p=1$x$y') RETURNING id",
+        (email,),
+    ).fetchone()[0]
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        # A user incident must have an owner; a demo must not.
+        "INSERT INTO scenarios (slug, title, alert_summary, incident_start) VALUES ('orphan', 't', 'a', now())",
+        "INSERT INTO scenarios (slug, title, alert_summary, incident_start, kind, owner_id)"
+        " VALUES ('owned-demo', 't', 'a', now(), 'demo', {owner})",
+    ],
+)
+def test_ownership_matches_kind(admin_conn, statement):
+    owner = _user(admin_conn, "constraint-owner@example.com")
+    with pytest.raises(errors.CheckViolation):
+        admin_conn.execute(statement.format(owner=owner))
+
+
+@pytest.mark.parametrize(
+    ("statement", "error"),
+    [
+        ("INSERT INTO users (email, password_hash) VALUES ('Mixed@Example.com', '$argon2id$x')", errors.CheckViolation),
+        ("INSERT INTO users (email, password_hash) VALUES ('plain@example.com', 'hunter2hunter2')", errors.CheckViolation),
+        ("INSERT INTO sessions (token_hash, user_id, csrf_token, expires_at)"
+         " VALUES ('not-a-hash', {owner}, repeat('c', 43), now() + interval '1 hour')", errors.CheckViolation),
+        ("INSERT INTO sessions (token_hash, user_id, csrf_token, expires_at)"
+         " VALUES (repeat('a', 64), {owner}, repeat('c', 43), now() - interval '1 hour')", errors.CheckViolation),
+        ("INSERT INTO sessions (token_hash, user_id, csrf_token, expires_at)"
+         " VALUES (repeat('a', 64), 999999999, repeat('c', 43), now() + interval '1 hour')", errors.ForeignKeyViolation),
+    ],
+)
+def test_account_constraints(admin_conn, statement, error):
+    owner = _user(admin_conn, "constraint-sessions@example.com")
+    with pytest.raises(error):
+        admin_conn.execute(statement.format(owner=owner))
+
+
+def test_deleting_an_account_removes_its_sessions_and_incidents(admin_conn):
+    owner = _user(admin_conn, "constraint-cascade@example.com")
+    scenario_id = admin_conn.execute(
+        "INSERT INTO scenarios (slug, title, alert_summary, incident_start, owner_id)"
+        " VALUES ('owned-probe', 't', 'a', now(), %s) RETURNING id", (owner,)
+    ).fetchone()[0]
+    admin_conn.execute(
+        f"INSERT INTO logs (scenario_id, service_id, ref, ts, level, message) VALUES (%s, {SERVICE}, 'log:0001', now(), 'INFO', 'x')",
+        (scenario_id,),
+    )
+    admin_conn.execute(
+        "INSERT INTO sessions (token_hash, user_id, csrf_token, expires_at)"
+        " VALUES (repeat('b', 64), %s, repeat('c', 43), now() + interval '1 hour')", (owner,)
+    )
+
+    admin_conn.execute("DELETE FROM users WHERE id = %s", (owner,))
+
+    for sql in ("SELECT count(*) FROM scenarios WHERE id = %s", "SELECT count(*) FROM logs WHERE scenario_id = %s"):
+        assert admin_conn.execute(sql, (scenario_id,)).fetchone()[0] == 0
+    assert admin_conn.execute("SELECT count(*) FROM sessions WHERE user_id = %s", (owner,)).fetchone()[0] == 0

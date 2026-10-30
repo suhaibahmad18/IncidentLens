@@ -9,7 +9,7 @@ pytestmark = pytest.mark.db
 EXPECTED_TABLES = {
     "services", "scenarios", "logs", "metrics", "deployments", "doc_chunks",
     "runs", "trace_steps", "eval_runs", "eval_results", "llm_cache", "schema_migrations",
-    "scenario_ground_truth",
+    "scenario_ground_truth", "users", "sessions",
 }
 
 
@@ -52,7 +52,9 @@ def test_key_column_types(admin_conn, table, column, expected):
 def test_migrations_recorded(admin_conn):
     versions = [row[0] for row in admin_conn.execute("SELECT version FROM schema_migrations ORDER BY 1")]
 
-    assert versions == ["0001_initial_schema", "0002_grants", "0003_ground_truth_and_evidence_refs"]
+    assert versions == ["0001_initial_schema", "0002_grants", "0003_ground_truth_and_evidence_refs",
+                        "0004_user_incidents", "0005_evidence_created_at",
+                        "0006_users_sessions_ownership"]
 
 
 def test_scenarios_table_holds_no_ground_truth(admin_conn):
@@ -63,7 +65,16 @@ def test_scenarios_table_holds_no_ground_truth(admin_conn):
         )
     }
 
-    assert columns == {"id", "slug", "title", "alert_summary", "incident_start", "created_at"}
+    assert columns == {"id", "slug", "title", "alert_summary", "incident_start", "created_at", "kind",
+                       "owner_id"}
+
+
+def test_seeded_scenarios_are_demos(admin_conn):
+    kinds = admin_conn.execute(
+        "SELECT DISTINCT s.kind FROM scenarios s JOIN scenario_ground_truth g ON g.scenario_id = s.id"
+    ).fetchall()
+
+    assert kinds == [("demo",)]
 
 
 def test_rerunning_migrations_applies_nothing(test_db):

@@ -46,10 +46,11 @@ def seed(url: SecretStr) -> dict[str, dict[str, int]]:
 
 def _seed_scenario(cur: psycopg.Cursor, data: ScenarioData, service_ids: dict) -> dict[str, int]:
     scenario_id = cur.execute(
-        "INSERT INTO scenarios (slug, title, alert_summary, incident_start)"
-        " VALUES (%s, %s, %s, %s)"
+        "INSERT INTO scenarios (slug, title, alert_summary, incident_start, kind)"
+        " VALUES (%s, %s, %s, %s, 'demo')"
         " ON CONFLICT (slug) DO UPDATE SET title = EXCLUDED.title,"
-        " alert_summary = EXCLUDED.alert_summary, incident_start = EXCLUDED.incident_start"
+        " alert_summary = EXCLUDED.alert_summary, incident_start = EXCLUDED.incident_start,"
+        " kind = 'demo'"
         " RETURNING id",
         (data.slug, data.title, data.alert_summary, data.incident_start),
     ).fetchone()[0]

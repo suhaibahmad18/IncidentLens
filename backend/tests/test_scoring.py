@@ -49,6 +49,8 @@ def test_inconclusive_is_never_counted_correct():
 def test_conclusive_without_valid_citations_is_unsupported():
     assert score_report(report(evidence=[]), TRUTH).unsupported_claim
     assert score_report(report(dropped_citations=["log:9999"]), TRUTH).unsupported_claim
+    assert score_report(report(unsupported_statements=["the disk was full"]), TRUTH).unsupported_claim
+    assert not score_report(report(), TRUTH).unsupported_claim
 
 
 def test_failed_run_scores_zero():

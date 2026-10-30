@@ -42,5 +42,17 @@ def open_tool_context(tools_ro_url: SecretStr, scenario_slug: str, embedder: Emb
         ).fetchone()
         if row is None:
             raise ToolContextError(f"unknown scenario: {scenario_slug}")
-        services = tuple(name for (name,) in conn.execute("SELECT name FROM services ORDER BY name"))
-        yield ToolContext(conn, row[0], scenario_slug, row[1], services, embedder)
+        yield ToolContext(conn, row[0], scenario_slug, row[1], incident_services(conn, row[0]), embedder)
+
+
+def incident_services(conn: psycopg.Connection, scenario_id: int) -> tuple[str, ...]:
+    """The allowlist: only services that appear in this incident's own evidence."""
+    rows = conn.execute(
+        "SELECT name FROM services WHERE id IN ("
+        " SELECT service_id FROM logs WHERE scenario_id = %(s)s"
+        " UNION SELECT service_id FROM metrics WHERE scenario_id = %(s)s"
+        " UNION SELECT service_id FROM deployments WHERE scenario_id = %(s)s"
+        ") ORDER BY name",
+        {"s": scenario_id},
+    ).fetchall()
+    return tuple(name for (name,) in rows)

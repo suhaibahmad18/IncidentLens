@@ -107,15 +107,22 @@ class GroqChatClient:
 
 
 class CachedChatClient:
-    """Reuses identical past completions from llm_cache (saves quota, makes re-runs repeatable)."""
+    """Reuses identical past completions from llm_cache (saves quota, makes re-runs repeatable).
 
-    def __init__(self, inner: ChatClient, conn: psycopg.Connection):
+    `namespace` identifies the incident AND the exact version of its evidence. Any evidence added
+    to the incident changes the namespace, so no cached step can be replayed after the evidence
+    changes, and entries are never shared between incidents.
+    """
+
+    def __init__(self, inner: ChatClient, conn: psycopg.Connection, namespace: str):
         self.model = inner.model
         self._inner = inner
         self._conn = conn  # incidentlens_app connection, autocommit
+        self._namespace = namespace
 
     def complete(self, messages: list[dict], tools: list[dict] | None, tool_choice: str) -> LLMResponse:
-        request = {"model": self.model, "messages": messages, "tools": tools, "tool_choice": tool_choice}
+        request = {"namespace": self._namespace, "model": self.model, "messages": messages, "tools": tools,
+                   "tool_choice": tool_choice}
         key = hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()
 
         row = self._conn.execute("SELECT response FROM llm_cache WHERE cache_key = %s", (key,)).fetchone()

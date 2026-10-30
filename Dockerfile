@@ -22,6 +22,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     FRONTEND_DIST=/app/frontend/dist \
     PATH="/app/backend/.venv/bin:$PATH"
 
+# Built for HTTPS deployments: Secure, __Host- session cookies and the demo-data banner. For a
+# plain-HTTP local container set PUBLIC_DEMO_MODE=false (or SESSION_COOKIE_SECURE=false), otherwise
+# the browser never sends the session cookie back and sign-in appears to do nothing.
+ENV PUBLIC_DEMO_MODE=true
+
 # Unprivileged user owns /app from the start (no chown -R layer that duplicates files).
 RUN useradd --create-home --uid 10001 incidentlens && mkdir /app && chown incidentlens /app
 USER incidentlens
@@ -37,5 +42,11 @@ RUN python -c "from app.rag.embeddings import FastEmbedEmbedder; FastEmbedEmbedd
 COPY --chown=incidentlens --from=frontend /build/frontend/dist /app/frontend/dist
 
 EXPOSE 8000
-# PORT is provided by most platforms; 8000 locally.
+# Liveness only (no database call); platforms should use /api/health/ready for readiness.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD python -c "import os, urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.environ.get(\"PORT\", \"8000\")}/api/health', timeout=4)"
+
+# Web service (default). PORT is provided by most platforms; 8000 locally.
+# The SAME image runs the one-off release job with a different command and environment:
+#     python -m app.db.release      (needs DATABASE_ADMIN_URL; the web service must not have it)
 CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips='*'"]

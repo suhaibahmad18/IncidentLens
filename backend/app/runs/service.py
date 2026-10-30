@@ -35,6 +35,23 @@ def groq_client_factory(settings: Settings) -> Callable[[], ChatClient] | None:
     )
 
 
+def evidence_version(conn, scenario_slug: str) -> str:
+    """Identifies an incident's evidence exactly. Evidence is insert-only, so counts plus the
+    latest insert time change whenever anything is added (or re-seeded)."""
+    row = conn.execute(
+        "SELECT s.id, (SELECT count(*) FROM logs WHERE scenario_id = s.id),"
+        " (SELECT count(*) FROM metrics WHERE scenario_id = s.id),"
+        " (SELECT count(*) FROM deployments WHERE scenario_id = s.id),"
+        " greatest((SELECT max(created_at) FROM logs WHERE scenario_id = s.id),"
+        "          (SELECT max(created_at) FROM metrics WHERE scenario_id = s.id),"
+        "          (SELECT max(created_at) FROM deployments WHERE scenario_id = s.id))"
+        " FROM scenarios s WHERE s.slug = %s",
+        (scenario_slug,),
+    ).fetchone()
+    scenario_id, logs, metrics, deployments, latest = row
+    return f"incident:{scenario_id}:{logs}:{metrics}:{deployments}:{latest.isoformat() if latest else '-'}"
+
+
 def limits_from(settings: Settings) -> AgentLimits:
     return AgentLimits(
         max_iterations=settings.agent_max_iterations,
@@ -96,7 +113,7 @@ class InvestigationService:
                 try:
                     llm = self._llm_factory()
                     if self._settings.llm_cache_enabled:
-                        llm = CachedChatClient(llm, app_conn)
+                        llm = CachedChatClient(llm, app_conn, evidence_version(app_conn, scenario_slug))
                     with open_tool_context(self._settings.tools_ro_database_url, scenario_slug, self._embedder) as ctx:
                         outcome = investigate(ctx, title, alert_summary, llm, store.DbTraceSink(app_conn, run_id),
                                               limits_from(self._settings))

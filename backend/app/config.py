@@ -53,7 +53,27 @@ class Settings(BaseSettings):
     groq_base_url: str = "https://api.groq.com/openai/v1"
     llm_timeout_seconds: float = Field(30.0, gt=0, le=120)
     llm_max_retries: int = Field(4, ge=0, le=8)  # SDK retries 429/5xx, honouring retry-after
-    llm_cache_enabled: bool = True
+    # Persistent LLM response cache (llm_cache table). Off by default: cached conversations contain
+    # incident evidence, and a re-run with unchanged evidence would replay the old answer. The
+    # cache key covers the whole conversation, so new evidence never hits a stale entry.
+    llm_cache_enabled: bool = False
+
+    # Public deployment posture (the Docker image enables it): secure-only session cookies and the
+    # public demo banner. In EVERY mode, user-created incidents are private to their owner and need
+    # a logged-in account; demo incidents are public and read-only.
+    public_demo_mode: bool = False
+
+    # Accounts and sessions.
+    registration_enabled: bool = True
+    session_ttl_hours: int = Field(168, ge=1, le=24 * 90)  # absolute lifetime (default 7 days)
+    # None = follow PUBLIC_DEMO_MODE (Secure cookies in public deployments, plain HTTP locally).
+    session_cookie_secure: bool | None = None
+    login_attempts_per_ip_per_15min: int = Field(20, ge=1, le=10_000)
+    login_failures_per_email_per_15min: int = Field(5, ge=1, le=1000)
+    registrations_per_ip_per_hour: int = Field(5, ge=1, le=10_000)
+    registrations_per_hour: int = Field(100, ge=1, le=100_000)
+    max_incidents_per_user: int = Field(20, ge=1, le=10_000)
+    max_runs_per_user_per_hour: int = Field(10, ge=1, le=1000)
 
     # Agent budgets: every investigation is bounded by these.
     agent_max_iterations: int = Field(8, ge=2, le=20)
@@ -62,6 +82,19 @@ class Settings(BaseSettings):
     max_concurrent_runs: int = Field(2, ge=1, le=10)
     # Public demo protection (no auth in the MVP): cap investigations per rolling hour.
     max_runs_per_hour: int = Field(20, ge=1, le=1000)
+    # ...and user-created incidents: per rolling hour, and in total.
+    max_incidents_per_hour: int = Field(30, ge=1, le=1000)
+    max_user_incidents: int = Field(200, ge=1, le=100_000)
+    # Evidence stored per user incident (log refs are 4 digits, hence the 9,999 ceiling).
+    max_incident_log_entries: int = Field(5000, ge=1, le=9999)
+    max_incident_metric_points: int = Field(2000, ge=1, le=100_000)
+    max_incident_deployments: int = Field(200, ge=1, le=10_000)
+    # Default age after which `python -m app.db.prune` removes user incidents (never demos).
+    user_incident_retention_days: int = Field(30, ge=1, le=3650)
+
+    @property
+    def cookie_secure(self) -> bool:
+        return self.public_demo_mode if self.session_cookie_secure is None else self.session_cookie_secure
 
     @field_validator("database_url")
     @classmethod
@@ -84,6 +117,8 @@ class WebSettings(BaseSettings):
     cors_origins: str = ""
     # Built React app to serve at "/" (frontend/dist by default) when it exists.
     frontend_dist: Path = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+    # Hard cap on any request body, enforced while it streams in (chunked uploads included).
+    max_request_bytes: int = Field(4_000_000, ge=10_000, le=50_000_000)
 
 
 class AdminSettings(BaseSettings):

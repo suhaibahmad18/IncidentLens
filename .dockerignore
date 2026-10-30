@@ -9,3 +9,6 @@
 **/__pycache__
 **/.pytest_cache
 frontend/dist
+# Tests are not needed at runtime (and include fixtures that reset databases).
+backend/tests
+frontend/tests

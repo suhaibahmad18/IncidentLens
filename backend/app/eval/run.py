@@ -1,6 +1,6 @@
 """Evaluate the agent on every scenario against hidden ground truth.
 
-Run from backend/:  uv run python -m app.eval.run [--split dev|holdout|all] [--no-cache]
+Run from backend/:  uv run python -m app.eval.run [--split dev|holdout|all] [--cache]
 
 This is the ONLY runtime code that reads ground truth, and it does so through the admin
 connection. The agent itself runs exactly as in production (tools_ro tools, incidentlens_app
@@ -114,13 +114,14 @@ def format_results(results: list[tuple[GroundTruth, Score, str]]) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Evaluate IncidentLens against hidden ground truth.")
     parser.add_argument("--split", choices=["dev", "holdout", "all"], default="all")
-    parser.add_argument("--no-cache", action="store_true", help="always call the model (ignore llm_cache)")
+    parser.add_argument("--cache", action="store_true",
+                        help="reuse/store identical model calls in llm_cache (repeatable runs, saves quota)")
     args = parser.parse_args()
 
     try:
         settings = get_settings()
-        if args.no_cache:
-            settings = settings.model_copy(update={"llm_cache_enabled": False})
+        if args.cache:
+            settings = settings.model_copy(update={"llm_cache_enabled": True})
         llm_factory = groq_client_factory(settings)
         if llm_factory is None:
             print("evaluation needs GROQ_API_KEY in .env", file=sys.stderr)

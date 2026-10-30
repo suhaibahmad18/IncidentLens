@@ -9,7 +9,9 @@ from pathlib import Path
 import app
 
 APP_DIR = Path(app.__file__).parent
-SEED_ONLY = {Path("db/seed.py")}
+# Admin-only maintenance commands. prune.py only uses the table name to check that a service is
+# unreferenced before deleting it; it never reads ground-truth content.
+SEED_ONLY = {Path("db/seed.py"), Path("db/prune.py")}
 FORBIDDEN_WORDS = ("scenario_ground_truth", "ground_truth", "expected_root_cause", "key_evidence_ids")
 
 

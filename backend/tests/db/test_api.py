@@ -10,6 +10,7 @@ from app.config import Settings
 from app.main import create_app
 from app.runs.service import InvestigationService
 from app.seed_data.ground_truth import GROUND_TRUTH
+from tests.auth_helpers import SignedInClient
 from tests.db.test_agent import GATHER, report_citing_seen
 from tests.fakes import FakeEmbedder
 from tests.llm_fakes import ScriptedLLM, final
@@ -19,17 +20,20 @@ pytestmark = pytest.mark.db
 SLUG = "checkout-db-pool-exhaustion"
 
 
-def make_client(test_db, script=None, enabled=True, max_runs=2):
+def make_client(test_db, script=None, enabled=True, max_runs=2, signed_in=False, **overrides):
+    """signed_in=True registers a fresh account when the client is entered (`with ... as c`)."""
     settings = Settings(
         _env_file=None,
         database_url=test_db["app"],
         tools_ro_database_url=test_db["tools_ro"],
-        llm_cache_enabled=False,
-        max_concurrent_runs=max_runs,
+        **{"llm_cache_enabled": False, "max_concurrent_runs": max_runs, **overrides},
     )
     llm_factory = (lambda: ScriptedLLM(list(script or []))) if enabled else None
     service = InvestigationService(settings, FakeEmbedder(), llm_factory)
-    return TestClient(create_app(settings=settings, investigations=service))
+    cls = SignedInClient if signed_in else TestClient
+    # Secure cookies are only sent over HTTPS, as in a browser.
+    base_url = "https://testserver" if settings.cookie_secure else "http://testserver"
+    return cls(create_app(settings=settings, investigations=service), base_url=base_url)
 
 
 @pytest.fixture
@@ -55,8 +59,8 @@ def test_health_endpoints(client):
 def test_list_incidents(client):
     incidents = client.get("/api/incidents").json()
 
-    assert {i["slug"] for i in incidents} == set(GROUND_TRUTH)
-    assert set(incidents[0]) == {"slug", "title", "alert_summary", "incident_start", "last_run_status"}
+    assert {i["slug"] for i in incidents if i["kind"] == "demo"} == set(GROUND_TRUTH)
+    assert set(incidents[0]) == {"slug", "kind", "title", "alert_summary", "incident_start", "last_run_status"}
     assert_no_ground_truth(incidents)
 
 
@@ -105,6 +109,8 @@ def test_full_investigation_flow(client):
 
     evidence = client.get(f"/api/runs/{run_id}/evidence").json()
     assert evidence and all(item["record"] is not None for item in evidence)
+    fact_ids = {i for fact in run["report"]["facts"] for i in fact["evidence_ids"]}
+    assert fact_ids and fact_ids <= {item["evidence_id"] for item in evidence}  # facts are resolvable too
     assert {item["record"]["kind"] for item in evidence} <= {"log", "deploy", "metric", "runbook"}
 
     runs = client.get(f"/api/incidents/{SLUG}/runs").json()

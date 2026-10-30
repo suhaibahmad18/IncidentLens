@@ -14,14 +14,27 @@ class Citation(BaseModel):
     why: str = Field("", max_length=400)
 
 
+class Fact(BaseModel):
+    """An observation read directly from evidence (not an inference)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    statement: str = Field(min_length=1, max_length=400)
+    evidence_ids: list[str] = Field(default_factory=list, max_length=6)
+
+
 class Report(BaseModel):
+    """Facts (observed) are kept apart from the hypothesis (inferred) and recommendations (advisory)."""
+
     model_config = ConfigDict(extra="ignore")
 
     status: Literal["conclusive", "inconclusive"]
-    root_cause: str = Field(max_length=800)
+    facts: list[Fact] = Field(default_factory=list, max_length=12)
+    root_cause: str = Field(max_length=800)  # the hypothesis
     affected_service: str | None = Field(None, max_length=64)
     confidence: float = Field(ge=0, le=1)
     explanation: str = Field(max_length=3000)
+    alternative_explanations: list[str] = Field(default_factory=list, max_length=4)
     evidence: list[Citation] = Field(default_factory=list, max_length=15)
     remediation: list[str] = Field(default_factory=list, max_length=8)
     missing_information: list[str] = Field(default_factory=list, max_length=8)
@@ -33,13 +46,16 @@ class ReportFormatError(Exception):
 
 REPORT_SCHEMA_HINT = """{
   "status": "conclusive" | "inconclusive",
-  "root_cause": "one or two sentences: the most likely root cause, or why it cannot be determined",
+  "facts": [{"statement": "something a tool result directly shows (no interpretation)",
+             "evidence_ids": ["the evidence_id(s) that show it"]}],
+  "root_cause": "your HYPOTHESIS: the most likely root cause, or why it cannot be determined",
   "affected_service": "the service where the root cause originates (must be one of the listed services), or null",
   "confidence": 0.0-1.0,
-  "explanation": "how the cited evidence supports the conclusion, in timeline order",
-  "evidence": [{"evidence_id": "an evidence_id returned by a tool", "why": "what it shows"}],
-  "remediation": ["advisory step for a human to approve"],
-  "missing_information": ["what else would need checking"]
+  "explanation": "how the facts support the hypothesis, in timeline order",
+  "alternative_explanations": ["other causes the evidence does not rule out"],
+  "evidence": [{"evidence_id": "an evidence_id supporting the hypothesis", "why": "what it shows"}],
+  "remediation": ["recommendation for a human to consider (nothing has been done)"],
+  "missing_information": ["unknowns: what the evidence cannot establish or what to check next"]
 }"""
 
 

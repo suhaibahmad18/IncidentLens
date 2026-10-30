@@ -45,8 +45,9 @@ def score_report(report: dict | None, truth: GroundTruth) -> Score:
     dropped = list(report.get("dropped_citations", []))
     key = set(truth.key_evidence_ids)
     recall = len(key & set(cited)) / len(key) if key else 0.0
-    # A conclusive claim is unsupported if it cites nothing valid, or cited evidence no tool returned.
-    unsupported = conclusive and (not cited or bool(dropped))
+    # A conclusive claim is unsupported if it cites nothing valid, cited evidence no tool returned,
+    # or presented statements as facts without valid evidence.
+    unsupported = conclusive and (not cited or bool(dropped) or bool(report.get("unsupported_statements")))
     citation_validity = len(cited) / (len(cited) + len(dropped)) if cited or dropped else 0.0
 
     score = (
