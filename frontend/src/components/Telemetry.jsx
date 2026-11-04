@@ -82,12 +82,24 @@ function Metrics({ metrics }) {
             </div>
             <div className="metric-value">
               {series.latest}<span className="unit"> {series.unit}</span>
+              <span className="metric-latest">latest</span>
             </div>
-            <Sparkline points={series.points} baseline={series.baseline_avg}
-              deviationMinutes={series.first_deviation_minutes_from_incident}
-              label={`${series.metric} trend, ${baselineText(series)}, max ${series.max}`} />
+            <div className="metric-chart">
+              <Sparkline points={series.points} baseline={series.baseline_avg}
+                deviationMinutes={series.first_deviation_minutes_from_incident}
+                label={`${series.metric} trend, ${baselineText(series)}, min ${series.min}, max ${series.max}`} />
+              <div className="metric-axis" aria-hidden="true">
+                <span>max {series.max}</span>
+                <span>min {series.min}</span>
+              </div>
+            </div>
+            <div className="metric-legend" aria-hidden="true">
+              <span className="legend-before">before start</span>
+              <span className="legend-start">incident start</span>
+              {series.baseline_avg !== null && <span className="legend-baseline">baseline</span>}
+            </div>
             <div className="metric-foot">
-              <span>{baselineText(series)} → max {series.max}</span>
+              <span>{baselineText(series)}</span>
               {deviated
                 ? <span className="pill pill-warn">deviates {relativeMinutes(series.first_deviation_minutes_from_incident)}</span>
                 : series.baseline_avg === null && <span className="pill">baseline unavailable</span>}
@@ -106,6 +118,7 @@ function Deployments({ deployments }) {
       {deployments.map((d) => (
         <li key={d.evidence_id}>
           <div className="deploy-head">
+            <span className={`deploy-dot status-${d.status}`} aria-hidden="true" />
             <strong>{d.service}</strong> <code className="version">{d.version}</code>
             <span className={`pill ${d.status === 'succeeded' ? '' : 'pill-error'}`}>{d.status.replace('_', ' ')}</span>
             <span className="muted small">{relativeMinutes(d.minutes_from_incident)}</span>

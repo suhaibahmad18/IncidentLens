@@ -7,12 +7,15 @@ import AuthPage from './components/AuthPage.jsx'
 import EvidenceSummary from './components/EvidenceSummary.jsx'
 import IncidentList from './components/IncidentList.jsx'
 import Investigation from './components/Investigation.jsx'
+import LoadingCard from './components/LoadingCard.jsx'
 import NewIncidentForm from './components/NewIncidentForm.jsx'
+import Overview from './components/Overview.jsx'
 import Telemetry from './components/Telemetry.jsx'
 import ThemeToggle from './components/ThemeToggle.jsx'
 import { formatTimestamp, pluralNoun } from './format.js'
 import { EMPTY_INCIDENT, evidenceStatus } from './incidentForm.js'
 import { applyTheme, otherTheme, readSavedTheme, resolveTheme, saveTheme } from './theme.js'
+import { runTone } from './ui.js'
 
 function LensMark() {
   return (
@@ -240,6 +243,7 @@ function App() {
   }
 
   const current = loaded?.slug === selected && loaded?.user === userId ? loaded : null
+  const detailTone = runTone(incidents.find((incident) => incident.slug === selected)?.last_run_status)
   const detail = current?.data
   const detailError = current?.error
   const status = detail ? evidenceStatus(detail.evidence) : null
@@ -303,7 +307,7 @@ function App() {
         )}
 
         {(auth.status === 'loading' || (route.name === 'new' && !signedIn)) && !authPage && (
-          <div className="card skeleton" aria-busy="true"><p className="muted">Loading…</p></div>
+          <LoadingCard />
         )}
 
         {creating && (
@@ -311,26 +315,34 @@ function App() {
             onCancel={() => navigate('#/')} />
         )}
 
+        {route.name === 'home' && !listLoading && !listError && incidents.length > 0 && (
+          <Overview incidents={incidents} signedIn={signedIn} />
+        )}
+
         {selected && auth.status !== 'loading' && (
           <>
             {detailError && (
-              <div className="error-box" role="alert">
+              <div className="error-box state-box" role="alert">
+                <strong className="state-title">
+                  {detailError.status === 404 ? 'Incident not available' : 'Could not load this incident'}
+                </strong>
                 {detailError.status === 404 ? (
                   <>
                     <p>This incident does not exist, or it belongs to another account.</p>
                     {!signedIn && <p className="small">If it is yours, <a href={loginHref}>sign in</a> to open it.</p>}
                   </>
-                ) : detailError.message}
+                ) : <p>{detailError.message}</p>}
               </div>
             )}
-            {!detail && !detailError && (
-              <div className="card skeleton" aria-busy="true"><p className="muted">Loading incident…</p></div>
-            )}
+            {!detail && !detailError && <LoadingCard label="Loading incident…" lines={4} />}
             {detail && (
               <>
-                <section className={`card alert-card kind-${isUser ? 'user' : 'demo'}`}>
+                <section className={`card alert-card kind-${isUser ? 'user' : 'demo'} tone-${detailTone.tone}`}>
                   <div className="alert-head">
                     <span className={`tag tag-${isUser ? 'user' : 'demo'}`}>{isUser ? 'Your incident · private' : 'Demo · simulated'}</span>
+                    <span className={`status-badge tone-${detailTone.tone}`}>
+                      <span className="status-dot" aria-hidden="true" />{detailTone.label}
+                    </span>
                     <span className="muted small">Incident start {formatTimestamp(detail.incident_start)}</span>
                     {isUser && (
                       <button type="button" className="link-button danger" onClick={() => handleDelete(detail)}
@@ -343,11 +355,22 @@ function App() {
                   <p className="alert-text">{detail.alert_summary}</p>
                   {detail.evidence && (
                     <div className="evidence-stats" aria-label="Evidence status">
-                      <span><strong>{detail.evidence.logs}</strong> {pluralNoun(detail.evidence.logs, 'log entry', 'log entries')}</span>
-                      <span><strong>{detail.evidence.metric_points}</strong> {pluralNoun(detail.evidence.metric_points, 'metric point')}</span>
-                      <span><strong>{detail.evidence.deployments}</strong> {pluralNoun(detail.evidence.deployments, 'deployment')}</span>
+                      <div className="stat-tile tone-log">
+                        <strong>{detail.evidence.logs.toLocaleString('en-US')}</strong>
+                        <span>{pluralNoun(detail.evidence.logs, 'log entry', 'log entries')}</span>
+                      </div>
+                      <div className="stat-tile tone-metric">
+                        <strong>{detail.evidence.metric_points.toLocaleString('en-US')}</strong>
+                        <span>{pluralNoun(detail.evidence.metric_points, 'metric point')}</span>
+                      </div>
+                      <div className="stat-tile tone-deploy">
+                        <strong>{detail.evidence.deployments.toLocaleString('en-US')}</strong>
+                        <span>{pluralNoun(detail.evidence.deployments, 'deployment')}</span>
+                      </div>
                       {detail.services?.length > 0 && (
-                        <span className="services">{detail.services.map((s) => <span key={s} className="service">{s}</span>)}</span>
+                        <div className="services" aria-label="Services">
+                          {detail.services.map((s) => <span key={s} className="service">{s}</span>)}
+                        </div>
                       )}
                     </div>
                   )}
@@ -376,7 +399,10 @@ function App() {
         )}
 
         {!selected && !creating && !authPage && route.name === 'home' && !listLoading && auth.status !== 'loading' && (
-          <p className="empty">Select an incident to begin.</p>
+          <div className="empty state-box">
+            <strong className="state-title">No incident selected</strong>
+            <p>Choose an incident from the list to see its evidence and investigation.</p>
+          </div>
         )}
       </main>
     </div>

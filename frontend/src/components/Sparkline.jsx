@@ -2,9 +2,9 @@ import { useId } from 'react'
 
 import { sparklineGeometry } from '../format.js'
 
-// Telemetry sparkline: soft area fill, dashed baseline (when one exists), incident-start marker
-// and a dot at the first deviation. Purely presentational; values come from the API.
-export default function Sparkline({ points, baseline = null, deviationMinutes = null, width = 180, height = 44, label }) {
+// Telemetry sparkline: shaded pre-incident window, soft area fill, dashed baseline (when one
+// exists), incident-start marker and a dot at the first deviation. Values come from the API.
+export default function Sparkline({ points, baseline = null, deviationMinutes = null, width = 240, height = 64, label }) {
   // useId() contains characters (":" or "«»") that are unreliable inside url(#...) references.
   const gradientId = `spark-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`
   const geometry = sparklineGeometry(points, { width, height, baseline, deviationMinutes })
@@ -20,6 +20,9 @@ export default function Sparkline({ points, baseline = null, deviationMinutes = 
       </defs>
       {geometry && (
         <>
+          {geometry.markerX !== null && (
+            <rect className="sparkline-before" x="0" y="0" width={geometry.markerX} height={height} />
+          )}
           <path d={geometry.area} fill={`url(#${gradientId})`} />
           {geometry.baselineY !== null && (
             <line className="sparkline-baseline" x1="0" x2={width} y1={geometry.baselineY} y2={geometry.baselineY} />
@@ -29,7 +32,7 @@ export default function Sparkline({ points, baseline = null, deviationMinutes = 
           )}
           <polyline className="sparkline-line" points={geometry.line} />
           {geometry.deviation && (
-            <circle className="sparkline-deviation" cx={geometry.deviation.x} cy={geometry.deviation.y} r="3" />
+            <circle className="sparkline-deviation" cx={geometry.deviation.x} cy={geometry.deviation.y} r="3.5" />
           )}
         </>
       )}

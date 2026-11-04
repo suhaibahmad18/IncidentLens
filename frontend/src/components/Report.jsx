@@ -1,14 +1,20 @@
 import { confidenceLabel, hasUnknowns, percent, pluralize, reportSections } from '../format.js'
+import { confidenceSegments } from '../ui.js'
 import EvidenceList, { EvidenceChip, EvidenceRecord } from './EvidenceList.jsx'
+
+const SEGMENTS = 5
 
 function ConfidenceMeter({ value }) {
   const label = confidenceLabel(value)
   const width = typeof value === 'number' ? Math.round(Math.min(Math.max(value, 0), 1) * 100) : 0
+  const filled = confidenceSegments(value, SEGMENTS)
   return (
     <div className={`confidence confidence-${label}`}>
-      <div className="confidence-bar" role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={width}
+      <div className="confidence-gauge" role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={width}
         aria-label="Confidence">
-        <span style={{ width: `${width}%` }} />
+        {Array.from({ length: SEGMENTS }, (_, i) => (
+          <span key={i} className={i < filled ? 'segment filled' : 'segment'} />
+        ))}
       </div>
       <span className="confidence-text">{label} · {percent(value)}</span>
     </div>

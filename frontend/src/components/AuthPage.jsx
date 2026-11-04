@@ -46,71 +46,82 @@ export default function AuthPage({ mode, next, registrationEnabled, notice, onSi
   }
 
   return (
-    <section className="card auth-card" aria-labelledby="auth-title">
-      <p className="eyebrow">Your workspace</p>
-      <h2 id="auth-title">{copy.title}</h2>
-      <p className="muted">
-        {registering
-          ? 'An account keeps the incidents you create private to you. Demo incidents stay open to everyone.'
-          : 'Sign in to create incidents, add evidence and investigate them privately.'}
-      </p>
+    <div className="auth-shell">
+      <aside className="auth-aside">
+        <p className="auth-aside-eyebrow">IncidentLens</p>
+        <h2 className="auth-aside-title">Evidence-backed incident triage</h2>
+        <ul className="auth-points">
+          <li><strong>Read-only investigation.</strong> The agent queries logs, metrics and deployments; it never changes a system.</li>
+          <li><strong>Every claim cited.</strong> Facts link to the exact log line, metric or deployment behind them.</li>
+          <li><strong>Private by default.</strong> Incidents you create are visible only to your account.</li>
+        </ul>
+      </aside>
+      <section className="card auth-card" aria-labelledby="auth-title">
+        <p className="eyebrow">Your workspace</p>
+        <h2 id="auth-title">{copy.title}</h2>
+        <p className="muted">
+          {registering
+            ? 'An account keeps the incidents you create private to you. Demo incidents stay open to everyone.'
+            : 'Sign in to create incidents, add evidence and investigate them privately.'}
+        </p>
 
-      {notice && <p className="notice small" role="status">{notice}</p>}
-      {registering && !registrationEnabled ? (
-        <p className="error-box" role="alert">Registration is closed on this deployment.</p>
-      ) : (
-        <form onSubmit={submit} noValidate className="incident-form auth-form">
-          {errors._form && <p className="error-box" role="alert">{errors._form}</p>}
+        {notice && <p className="notice small" role="status">{notice}</p>}
+        {registering && !registrationEnabled ? (
+          <p className="error-box" role="alert">Registration is closed on this deployment.</p>
+        ) : (
+          <form onSubmit={submit} noValidate className="incident-form auth-form">
+            {errors._form && <p className="error-box" role="alert">{errors._form}</p>}
 
-          <Field id="auth-email" label="Email" error={errors.email}>
-            <input id="auth-email" type="email" autoComplete="email" inputMode="email" value={values.email}
-              disabled={submitting} maxLength={254} required onChange={(e) => update('email', e.target.value)}
-              aria-invalid={errors.email ? 'true' : undefined}
-              aria-describedby={errors.email ? 'auth-email-error' : undefined} />
-          </Field>
-
-          <Field id="auth-password" label="Password" error={errors.password}
-            hint={registering ? `At least ${PASSWORD_MIN} characters. A few unrelated words work well.` : null}>
-            <input id="auth-password" type={showPassword ? 'text' : 'password'}
-              autoComplete={registering ? 'new-password' : 'current-password'} value={values.password}
-              disabled={submitting} maxLength={128} required onChange={(e) => update('password', e.target.value)}
-              aria-invalid={errors.password ? 'true' : undefined}
-              aria-describedby={[registering && 'auth-password-hint', errors.password && 'auth-password-error']
-                .filter(Boolean).join(' ') || undefined} />
-          </Field>
-
-          {registering && (
-            <Field id="auth-confirm" label="Confirm password" error={errors.confirm}>
-              <input id="auth-confirm" type={showPassword ? 'text' : 'password'} autoComplete="new-password"
-                value={values.confirm} disabled={submitting} maxLength={128} required
-                onChange={(e) => update('confirm', e.target.value)}
-                aria-invalid={errors.confirm ? 'true' : undefined}
-                aria-describedby={errors.confirm ? 'auth-confirm-error' : undefined} />
+            <Field id="auth-email" label="Email" error={errors.email}>
+              <input id="auth-email" type="email" autoComplete="email" inputMode="email" value={values.email}
+                disabled={submitting} maxLength={254} required onChange={(e) => update('email', e.target.value)}
+                aria-invalid={errors.email ? 'true' : undefined}
+                aria-describedby={errors.email ? 'auth-email-error' : undefined} />
             </Field>
-          )}
 
-          <label className="checkbox small">
-            <input type="checkbox" checked={showPassword} onChange={(e) => setShowPassword(e.target.checked)} />
-            Show password
-          </label>
+            <Field id="auth-password" label="Password" error={errors.password}
+              hint={registering ? `At least ${PASSWORD_MIN} characters. A few unrelated words work well.` : null}>
+              <input id="auth-password" type={showPassword ? 'text' : 'password'}
+                autoComplete={registering ? 'new-password' : 'current-password'} value={values.password}
+                disabled={submitting} maxLength={128} required onChange={(e) => update('password', e.target.value)}
+                aria-invalid={errors.password ? 'true' : undefined}
+                aria-describedby={[registering && 'auth-password-hint', errors.password && 'auth-password-error']
+                  .filter(Boolean).join(' ') || undefined} />
+            </Field>
 
-          <div className="form-actions">
-            <button type="submit" className="primary" disabled={submitting}>
-              {submitting ? copy.busy : copy.submit}
-            </button>
-          </div>
-        </form>
-      )}
+            {registering && (
+              <Field id="auth-confirm" label="Confirm password" error={errors.confirm}>
+                <input id="auth-confirm" type={showPassword ? 'text' : 'password'} autoComplete="new-password"
+                  value={values.confirm} disabled={submitting} maxLength={128} required
+                  onChange={(e) => update('confirm', e.target.value)}
+                  aria-invalid={errors.confirm ? 'true' : undefined}
+                  aria-describedby={errors.confirm ? 'auth-confirm-error' : undefined} />
+              </Field>
+            )}
 
-      <p className="muted small auth-switch">
-        {registering ? 'Already have an account? ' : 'New here? '}
-        {(registering || registrationEnabled) && (
-          <a href={routeHash({ name: other, next })}>{registering ? 'Sign in' : 'Create an account'}</a>
+            <label className="checkbox small">
+              <input type="checkbox" checked={showPassword} onChange={(e) => setShowPassword(e.target.checked)} />
+              Show password
+            </label>
+
+            <div className="form-actions">
+              <button type="submit" className="primary" disabled={submitting}>
+                {submitting ? copy.busy : copy.submit}
+              </button>
+            </div>
+          </form>
         )}
-        {!registering && !registrationEnabled && 'Registration is closed on this deployment.'}
-        {' · '}<a href="#/">Browse the demo incidents</a>
-      </p>
-    </section>
+
+        <p className="muted small auth-switch">
+          {registering ? 'Already have an account? ' : 'New here? '}
+          {(registering || registrationEnabled) && (
+            <a href={routeHash({ name: other, next })}>{registering ? 'Sign in' : 'Create an account'}</a>
+          )}
+          {!registering && !registrationEnabled && 'Registration is closed on this deployment.'}
+          {' · '}<a href="#/">Browse the demo incidents</a>
+        </p>
+      </section>
+    </div>
   )
 }
 

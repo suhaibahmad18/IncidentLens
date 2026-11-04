@@ -1,6 +1,5 @@
 import { formatTimestamp } from '../format.js'
-
-const STATUS_TEXT = { completed: 'investigated', failed: 'last run failed', running: 'investigating', pending: 'queued' }
+import { runTone } from '../ui.js'
 
 // Signed in: "Your incidents" (private to the account) above the public demos.
 // Visitors: the demos, plus an invitation to sign in for private incidents.
@@ -56,21 +55,21 @@ function IncidentGroup({ title, kind, items, selected, onSelect, empty }) {
       ) : (
         <ul className="incident-list">
           {items.map((incident) => {
-            const status = incident.last_run_status
+            const { tone, label } = runTone(incident.last_run_status)
             return (
               <li key={incident.slug}>
                 <button
                   type="button"
-                  className={`incident-item kind-${incident.kind}${incident.slug === selected ? ' selected' : ''}`}
+                  className={`incident-item kind-${incident.kind} tone-${tone}${incident.slug === selected ? ' selected' : ''}`}
                   onClick={() => onSelect(incident.slug)}
                   aria-current={incident.slug === selected ? 'true' : undefined}
                 >
                   <span className="incident-title">{incident.title}</span>
                   <span className="incident-meta">
-                    <span className={`status-dot status-${status ?? 'none'}`} aria-hidden="true" />
-                    <span>{status ? STATUS_TEXT[status] ?? status : 'not investigated'}</span>
-                    <span aria-hidden="true">·</span>
-                    <span>{formatTimestamp(incident.incident_start)}</span>
+                    <span className={`status-badge tone-${tone}`}>
+                      <span className="status-dot" aria-hidden="true" />{label}
+                    </span>
+                    <span className="incident-time">{formatTimestamp(incident.incident_start)}</span>
                   </span>
                 </button>
               </li>
