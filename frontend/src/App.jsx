@@ -266,11 +266,7 @@ function App() {
           </div>
         </a>
         <div className="topbar-meta">
-          {config && (
-            <span className={config.public_demo_mode ? 'env-chip public' : 'env-chip'}>
-              {config.public_demo_mode ? 'Public demo' : 'Local workspace'}
-            </span>
-          )}
+          {config && !config.public_demo_mode && <span className="env-chip">Local workspace</span>}
           {config?.model && <span className="model-chip" title="Language model">{config.model}</span>}
           <UserMenu auth={auth} registrationEnabled={registrationEnabled} onLogout={handleLogout} route={route}
             theme={theme} onToggleTheme={toggleTheme} />
