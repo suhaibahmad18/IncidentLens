@@ -19,7 +19,7 @@ from app.http_guards import BodySizeLimit, SameOriginWrites, SecurityHeaders
 from app.rag.embeddings import get_embedder
 from app.ratelimit import KeyedLimiter, SlidingWindowLimiter
 from app.runs import store
-from app.runs.service import InvestigationService, groq_client_factory
+from app.runs.service import InvestigationService, groq_client_factory, stale_run_seconds
 
 logger = logging.getLogger("incidentlens")
 
@@ -58,7 +58,9 @@ def create_app(settings: Settings | None = None, investigations: InvestigationSe
             logger.info("session cookies are not marked Secure (local HTTP development)")
         try:
             with connect(resolved.database_url, autocommit=True) as conn:
-                interrupted = store.fail_interrupted_runs(conn)
+                # Only runs with no progress for longer than any live run can be quiet: a run still
+                # executing on another instance (overlapping deploy) is left alone.
+                interrupted = store.fail_interrupted_runs(conn, stale_run_seconds(resolved))
             if interrupted:
                 logger.warning("marked %d interrupted run(s) as failed", interrupted)
         except psycopg.Error as exc:

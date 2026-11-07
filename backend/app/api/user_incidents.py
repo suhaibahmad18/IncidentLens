@@ -25,6 +25,8 @@ from app.incidents.parsing import (
     parse_evidence,
 )
 from app.incidents.redaction import redact
+from app.runs import store as run_store
+from app.runs.service import stale_run_seconds
 
 router = APIRouter(prefix="/api")
 
@@ -132,8 +134,12 @@ def add_evidence(request: Request, slug: Slug, body: EvidenceIn):
 def delete_incident(request: Request, slug: Slug):
     """Permanently delete one of the caller's incidents with its evidence, runs and traces."""
     user = require_user(request)
-    with connect(request.app.state.settings.database_url) as conn:
+    settings = request.app.state.settings
+    with connect(settings.database_url) as conn:
         scenario_id = _owned(conn, slug, user)
+        # A run that crashed (no progress for longer than any live run can be quiet) must not
+        # block the delete forever; runs that may still be executing still do.
+        run_store.fail_interrupted_runs(conn, stale_run_seconds(settings))
         try:
             store.delete_incident(conn, scenario_id, owner_id=user.id)
         except store.IncidentNotFound:

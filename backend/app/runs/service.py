@@ -52,6 +52,25 @@ def evidence_version(conn, scenario_slug: str) -> str:
     return f"incident:{scenario_id}:{logs}:{metrics}:{deployments}:{latest.isoformat() if latest else '-'}"
 
 
+# Longest `retry-after` the OpenAI SDK honours before retrying a 429/5xx (its
+# MAX_RETRY_AFTER_DELAY; a test keeps the two in sync).
+SDK_MAX_RETRY_AFTER_SECONDS = 120
+STALE_RUN_MARGIN_SECONDS = 120
+
+
+def stale_run_seconds(settings: Settings) -> float:
+    """How long a run may go without recording progress before it is treated as interrupted.
+
+    The 300 s agent budget is checked between model calls, so it does not bound how long a run
+    goes quiet: the longest silent stretch is one model call with every SDK retry (each attempt
+    up to the timeout, each wait up to the SDK's retry-after cap). Defaults: 30*5 + 4*120 = 630 s,
+    plus a margin = 750 s.
+    """
+    longest_call = (settings.llm_timeout_seconds * (settings.llm_max_retries + 1)
+                    + settings.llm_max_retries * SDK_MAX_RETRY_AFTER_SECONDS)
+    return longest_call + STALE_RUN_MARGIN_SECONDS
+
+
 def limits_from(settings: Settings) -> AgentLimits:
     return AgentLimits(
         max_iterations=settings.agent_max_iterations,
@@ -98,6 +117,8 @@ class InvestigationService:
             raise TooManyRuns()
         try:
             with connect(self._settings.database_url, autocommit=True) as conn:
+                # Retire runs that crashed since the last startup, so they don't look active forever.
+                store.fail_interrupted_runs(conn, stale_run_seconds(self._settings))
                 return store.create_run(conn, scenario_id, self._settings.groq_model)
         except Exception:
             self._slots.release()
@@ -122,7 +143,9 @@ class InvestigationService:
                 except Exception as exc:  # unexpected: store a safe summary, log the type only
                     logger.error("investigation %s crashed: %s", run_id, type(exc).__name__)
                     error = f"internal_error: {type(exc).__name__}"
-                store.finish_run(app_conn, run_id, outcome.report if outcome else None, error)
+                if not store.finish_run(app_conn, run_id, outcome.report if outcome else None, error):
+                    # Already finished elsewhere (marked interrupted): keep that terminal status.
+                    logger.warning("run %s was already finished; its late outcome was not stored", run_id)
         except Exception as exc:
             logger.error("could not persist run %s: %s", run_id, type(exc).__name__)
         finally:

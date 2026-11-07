@@ -20,19 +20,38 @@ def mark_running(conn: psycopg.Connection, run_id: uuid.UUID) -> None:
     conn.execute("UPDATE runs SET status = 'running' WHERE id = %s AND status = 'pending'", (run_id,))
 
 
-def finish_run(conn: psycopg.Connection, run_id: uuid.UUID, report: dict | None, error: str | None) -> None:
-    conn.execute(
-        "UPDATE runs SET status = %s, final_report = %s, error = %s, finished_at = now() WHERE id = %s",
-        ("completed" if error is None else "failed", Jsonb(report) if report is not None else None, error, run_id),
-    )
+def finish_run(conn: psycopg.Connection, run_id: uuid.UUID, report: dict | None, error: str | None) -> bool:
+    """Store the outcome, unless the run is already finished.
 
-
-def fail_interrupted_runs(conn: psycopg.Connection) -> int:
-    """Runs left pending/running by a restart can never finish: mark them failed."""
+    A run can be finished elsewhere first: another app instance may have marked it failed as
+    interrupted. A finished run is never overwritten. The status check and the write are a single
+    UPDATE, so concurrent writers cannot both succeed. Returns True if this call finished the run.
+    """
     return conn.execute(
-        "UPDATE runs SET status = 'failed', error = %s, finished_at = now()"
-        " WHERE status IN ('pending', 'running')",
-        ("interrupted: the server restarted before the investigation finished",),
+        "UPDATE runs SET status = %s, final_report = %s, error = %s, finished_at = now()"
+        " WHERE id = %s AND status IN ('pending', 'running')",
+        ("completed" if error is None else "failed", Jsonb(report) if report is not None else None, error, run_id),
+    ).rowcount == 1
+
+
+INTERRUPTED_ERROR = "interrupted: the investigation stopped making progress (for example, the server restarted)"
+
+
+def fail_interrupted_runs(conn: psycopg.Connection, stale_after_seconds: float) -> int:
+    """Mark failed the pending/running runs that cannot still be alive.
+
+    A run counts as interrupted only when it has recorded no progress (no new trace step, or no
+    start, for runs without steps) for `stale_after_seconds`. Live runs on any instance record a
+    trace step after every model and tool call, so a run that is merely slow, or that is running
+    on another instance during an overlapping deploy, is left alone. Timestamps all come from the
+    database clock. One atomic UPDATE: a run finished concurrently is skipped, never overwritten.
+    """
+    return conn.execute(
+        "UPDATE runs r SET status = 'failed', error = %s, finished_at = now()"
+        " WHERE r.status IN ('pending', 'running')"
+        " AND greatest(r.started_at, (SELECT max(t.created_at) FROM trace_steps t WHERE t.run_id = r.id))"
+        "     < now() - make_interval(secs => %s)",
+        (INTERRUPTED_ERROR, stale_after_seconds),
     ).rowcount
 
 

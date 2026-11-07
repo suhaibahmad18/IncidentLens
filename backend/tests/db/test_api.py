@@ -159,9 +159,11 @@ def test_hourly_run_limit(test_db):
 
 
 def test_interrupted_runs_are_failed_on_startup(test_db, admin_conn):
+    # Interrupted = no progress for far longer than any live run can be quiet. A run that may still
+    # be executing elsewhere is left alone (tests/db/test_run_lifecycle.py covers that side).
     run_id = admin_conn.execute(
-        "INSERT INTO runs (scenario_id, model, status) SELECT id, 'm', 'running' FROM scenarios"
-        f" WHERE slug = '{SLUG}' RETURNING id"
+        "INSERT INTO runs (scenario_id, model, status, started_at) SELECT id, 'm', 'running',"
+        f" now() - interval '1 hour' FROM scenarios WHERE slug = '{SLUG}' RETURNING id"
     ).fetchone()[0]
     admin_conn.commit()
 
