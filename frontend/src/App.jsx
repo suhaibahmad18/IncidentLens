@@ -277,15 +277,6 @@ function App() {
         </div>
       </header>
 
-      {config?.public_demo_mode && (
-        <div className="demo-banner" role="note">
-          <strong>Public demo with simulated incidents.</strong> The demo logs, metrics and deployments are
-          synthetic. IncidentLens v1 analyses evidence supplied to it; it does not connect to live monitoring
-          systems. {signedIn ? 'Incidents you create are visible only to your account.'
-            : 'Sign in to create private incidents from your own evidence.'}
-        </div>
-      )}
-
       <aside className="sidebar">
         {signedIn && (
           <p className="sidebar-account small">Signed in as <strong>{auth.user.email}</strong></p>
